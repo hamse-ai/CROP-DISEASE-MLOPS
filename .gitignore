@@ -1,0 +1,55 @@
+# ---- Dataset ----------------------------------------------------------------
+# The full PlantVillage dataset (~1.5 GB, 54,303 images) is NOT committed.
+# Fetch it with:  python src/acquire_data.py
+# A small sample (5 images per class) IS committed so the repo runs out of the box
+# -- the negations below keep that sample tracked.
+data/train/**
+data/test/**
+!data/train/**/
+!data/test/**/
+!data/**/.gitkeep
+!data/**/SAMPLE_*.jpg
+!data/**/SAMPLE_*.JPG
+!data/**/SAMPLE_*.png
+!data/**/SAMPLE_*.PNG
+
+# Raw download staging + user uploads awaiting retraining
+data/raw/
+data/uploads/*
+!data/uploads/.gitkeep
+data/PlantVillage-Dataset/
+
+# ---- Model artifacts --------------------------------------------------------
+# The frozen backbone, class names and registry ARE committed (small, needed to run).
+# Embedding replay buffers and retrained head versions are not.
+models/*.npz
+models/head_v*.pkl
+!models/head_v1.pkl
+models/checkpoints/
+*.h5
+*.keras
+saved_model/
+
+# ---- Runtime state ----------------------------------------------------------
+reports/load_test/*.csv
+!reports/load_test/.gitkeep
+logs/
+*.log
+monitoring_state.json
+prediction_log.jsonl
+
+# ---- Python -----------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ipynb_checkpoints/
+env/
+venv/
+.venv/
+
+# ---- OS / editor ------------------------------------------------------------
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
