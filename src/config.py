@@ -26,6 +26,9 @@ RAW_DIR = DATA_DIR / "raw"
 MODEL_DIR = Path(os.getenv("MODEL_DIR", PROJECT_ROOT / "models"))
 BACKBONE_PATH = MODEL_DIR / "backbone_mobilenetv2.onnx"
 REPLAY_BUFFER_PATH = MODEL_DIR / "train_embeddings.npz"
+# Held-out embeddings shipped with the model so the container can score a
+# retrained head without needing the image dataset present.
+EVAL_EMBEDDINGS_PATH = MODEL_DIR / "eval_embeddings.npz"
 CLASS_NAMES_PATH = MODEL_DIR / "class_names.json"
 REGISTRY_PATH = MODEL_DIR / "registry.json"
 
@@ -72,6 +75,8 @@ BATCH_SIZE = 32
 # a new head is always fitted on (buffer + newly uploaded images), never on the
 # uploads alone. See src/retrain.py.
 REPLAY_SAMPLES_PER_CLASS = 300
+# A smaller held-out sample used only to score retrained heads in-container.
+EVAL_SAMPLES_PER_CLASS = 100
 
 # --------------------------------------------------------------------------
 # Retraining triggers
