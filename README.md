@@ -220,8 +220,13 @@ git push -u origin main
 ```
 
 Then in Render: **New → Blueprint → connect the repo**. `render.yaml` is detected and both
-services deploy. The UI receives the API's URL automatically via `fromService`; the
-resolver handles Render's scheme-less hostname.
+services deploy.
+
+One value must be set by hand. Render prompts for `API_URL` on the UI service; give it the
+API's **public** URL, `https://<api-service>.onrender.com`, with no trailing slash. This
+cannot be wired automatically: `fromService ... property: host` returns the private-network
+hostname rather than the public domain, and Render exposes no property for the latter — so
+`render.yaml` marks the variable `sync: false` instead of wiring it wrongly.
 
 ## Honest limitations
 

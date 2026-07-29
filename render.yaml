@@ -47,11 +47,17 @@ services:
     region: frankfurt
     healthCheckPath: /_stcore/health
     envVars:
-      # Yields a bare hostname such as "crop-disease-api.onrender.com" with no
-      # scheme, and Render does not interpolate strings into envVars. The UI's
-      # _resolve_api_url() prepends https:// when the scheme is missing.
+      # Set in the dashboard, NOT via fromService.
+      #
+      # `fromService ... property: host` was the obvious choice and is wrong:
+      # for a web service it yields the PRIVATE-network hostname
+      # ("crop-disease-api-1sd1"), not the public domain. The UI then resolved
+      # it to https://crop-disease-api-1sd1/ and every request failed. Render
+      # exposes no blueprint property for the public URL, and the public
+      # subdomain carries a random suffix that cannot be known when this file
+      # is written -- so `sync: false` makes Render prompt for it on apply and
+      # never overwrite the dashboard value afterwards.
+      #
+      # Expected value: https://<api-service>.onrender.com  (no trailing slash)
       - key: API_URL
-        fromService:
-          name: crop-disease-api
-          type: web
-          property: host
+        sync: false
