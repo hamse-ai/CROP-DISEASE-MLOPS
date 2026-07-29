@@ -3,7 +3,7 @@
 # The whole backbone/head architecture exists so this list stays short enough
 # to run inside a 512 MB container. Adding tensorflow here would defeat it.
 
-fastapi==0.115.6
+fastapi==0.140.13
 uvicorn[standard]==0.34.0
 python-multipart==0.0.20
 pydantic==2.10.4

@@ -368,3 +368,20 @@ def test_monitor_state_survives_restart(tmp_path):
     restored.restore()
     assert restored.total_predictions == 7
     assert restored.class_counts["Tomato___healthy"] == 7
+
+
+def test_error_rate_uses_attempted_requests(tmp_path):
+    """Errors without any successful prediction must not report 0%.
+
+    Dividing by successes alone hides the worst case: a service where every
+    request fails would report a 0% error rate.
+    """
+    monitor = ServiceMonitor(state_path=tmp_path / "state.json")
+
+    for _ in range(3):
+        monitor.record_error()
+    assert monitor.stats()["error_rate"] == 1.0, "all-failures must read as 100%"
+
+    for _ in range(97):
+        monitor.record_prediction(confidence=0.9, latency_ms=5.0)
+    assert monitor.stats()["error_rate"] == pytest.approx(0.03)

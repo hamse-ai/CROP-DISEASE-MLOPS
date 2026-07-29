@@ -1,0 +1,10 @@
+# Streamlit dashboard container.
+#
+# The UI holds no model and never imports src/ -- it talks to the API over HTTP
+# only. That keeps this image small and means the dashboard reflects the
+# deployed service's real state rather than a local recomputation.
+
+streamlit==1.60.0
+plotly==6.9.0
+pandas==2.2.3
+requests==2.32.3

@@ -129,13 +129,18 @@ class ServiceMonitor:
 
         mean_confidence = (sum(confidences) / len(confidences)) if confidences else None
 
+        # Denominator is every attempted request, not just the successful ones.
+        # Dividing by successes alone would report 0% when every single request
+        # failed -- the exact case the number exists to surface.
+        attempted = total + errors
+
         return {
             "uptime_seconds": round(self.uptime_seconds, 1),
             "uptime_human": _format_duration(self.uptime_seconds),
             "started_at": self.started_at_iso,
             "total_predictions": total,
             "total_errors": errors,
-            "error_rate": round(errors / total, 4) if total else 0.0,
+            "error_rate": round(errors / attempted, 4) if attempted else 0.0,
             "requests_per_second_1m": rps,
             "latency_ms": {
                 "count": len(latencies),
