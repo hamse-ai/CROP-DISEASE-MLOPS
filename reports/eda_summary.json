@@ -1,0 +1,165 @@
+{
+  "n_images_sampled": 3040,
+  "n_classes": 38,
+  "n_crops": 14,
+  "imbalance_ratio": 34.8,
+  "smallest_class": "Potato___healthy",
+  "largest_class": "Orange___Haunglongbing_(Citrus_greening)",
+  "tomato_class_share": 10,
+  "features": {
+    "excess_green": {
+      "healthy_mean": 28.4423,
+      "diseased_mean": 23.2925,
+      "cohens_d_pooled": 0.254,
+      "cohens_d_within_crop_mean": 1.152,
+      "sign_consistent_across_crops": false
+    },
+    "redness_index": {
+      "healthy_mean": -0.0479,
+      "diseased_mean": -0.0256,
+      "cohens_d_pooled": -0.666,
+      "cohens_d_within_crop_mean": 1.08,
+      "sign_consistent_across_crops": false
+    },
+    "green_ratio": {
+      "healthy_mean": 0.3763,
+      "diseased_mean": 0.3667,
+      "cohens_d_pooled": 0.367,
+      "cohens_d_within_crop_mean": 0.989,
+      "sign_consistent_across_crops": false
+    },
+    "mean_saturation": {
+      "healthy_mean": 63.0679,
+      "diseased_mean": 68.6572,
+      "cohens_d_pooled": -0.287,
+      "cohens_d_within_crop_mean": 0.904,
+      "sign_consistent_across_crops": false
+    },
+    "edge_density": {
+      "healthy_mean": 0.0894,
+      "diseased_mean": 0.0842,
+      "cohens_d_pooled": 0.096,
+      "cohens_d_within_crop_mean": 0.771,
+      "sign_consistent_across_crops": false
+    },
+    "laplacian_var": {
+      "healthy_mean": 1213.1219,
+      "diseased_mean": 916.1853,
+      "cohens_d_pooled": 0.407,
+      "cohens_d_within_crop_mean": 0.977,
+      "sign_consistent_across_crops": false
+    },
+    "gray_entropy": {
+      "healthy_mean": 6.9905,
+      "diseased_mean": 6.8858,
+      "cohens_d_pooled": 0.245,
+      "cohens_d_within_crop_mean": 0.577,
+      "sign_consistent_across_crops": false
+    },
+    "brightness": {
+      "healthy_mean": 126.6732,
+      "diseased_mean": 113.4296,
+      "cohens_d_pooled": 0.761,
+      "cohens_d_within_crop_mean": 0.794,
+      "sign_consistent_across_crops": false
+    }
+  },
+  "texture_redundancy_r": 0.903,
+  "mean_abs_d_pooled": 0.385,
+  "mean_abs_d_within_crop": 0.906,
+  "brightness_outranks_colour": true,
+  "within_crop_table": {
+    "Apple": {
+      "excess_green": -1.143,
+      "redness_index": 0.132,
+      "green_ratio": -0.885,
+      "mean_saturation": -0.9,
+      "edge_density": 0.086,
+      "laplacian_var": 0.093,
+      "gray_entropy": 0.826,
+      "brightness": -0.003
+    },
+    "Cherry (including sour)": {
+      "excess_green": 0.349,
+      "redness_index": -0.583,
+      "green_ratio": 0.507,
+      "mean_saturation": 0.373,
+      "edge_density": 0.481,
+      "laplacian_var": 1.912,
+      "gray_entropy": -0.373,
+      "brightness": 1.074
+    },
+    "Corn (maize)": {
+      "excess_green": 3.15,
+      "redness_index": -2.125,
+      "green_ratio": 1.611,
+      "mean_saturation": 0.751,
+      "edge_density": -1.134,
+      "laplacian_var": -0.941,
+      "gray_entropy": 0.522,
+      "brightness": 1.497
+    },
+    "Grape": {
+      "excess_green": 0.597,
+      "redness_index": -0.993,
+      "green_ratio": -0.079,
+      "mean_saturation": -1.113,
+      "edge_density": -1.941,
+      "laplacian_var": -0.948,
+      "gray_entropy": -1.949,
+      "brightness": 1.292
+    },
+    "Peach": {
+      "excess_green": -2.19,
+      "redness_index": 0.248,
+      "green_ratio": -1.306,
+      "mean_saturation": -1.836,
+      "edge_density": 0.73,
+      "laplacian_var": 1.571,
+      "gray_entropy": 1.222,
+      "brightness": 1.169
+    },
+    "Pepper bell": {
+      "excess_green": 0.527,
+      "redness_index": -1.212,
+      "green_ratio": 0.365,
+      "mean_saturation": -1.191,
+      "edge_density": -0.761,
+      "laplacian_var": -0.52,
+      "gray_entropy": -0.007,
+      "brightness": 0.894
+    },
+    "Potato": {
+      "excess_green": 0.337,
+      "redness_index": -1.522,
+      "green_ratio": 1.199,
+      "mean_saturation": -0.092,
+      "edge_density": 0.403,
+      "laplacian_var": 0.701,
+      "gray_entropy": 0.029,
+      "brightness": 0.033
+    },
+    "Strawberry": {
+      "excess_green": 2.069,
+      "redness_index": -2.709,
+      "green_ratio": 2.515,
+      "mean_saturation": 0.812,
+      "edge_density": -0.498,
+      "laplacian_var": 0.647,
+      "gray_entropy": 0.078,
+      "brightness": -1.158
+    },
+    "Tomato": {
+      "excess_green": -0.004,
+      "redness_index": 0.193,
+      "green_ratio": -0.436,
+      "mean_saturation": -1.073,
+      "edge_density": 0.908,
+      "laplacian_var": 1.46,
+      "gray_entropy": -0.183,
+      "brightness": 0.028
+    }
+  },
+  "background_fraction_median": 0.385,
+  "corner_std_median": 23.762
+}

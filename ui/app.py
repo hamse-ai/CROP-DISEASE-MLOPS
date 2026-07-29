@@ -356,14 +356,21 @@ with tab_insights:
     st.divider()
 
     # -- Finding 2 --------------------------------------------------------
-    st.markdown("#### 2 · Colour alone already separates healthy from diseased")
+    st.markdown("#### 2 · Colour carries the signal — but only within a crop")
     st.markdown(
         "Chlorosis and necrosis — yellowing and browning — are the visible signature "
-        "of most foliar disease. The **excess-green index** (2G − R − B, standard in "
-        "precision agriculture) and a simple redness ratio show healthy leaves sitting "
-        "measurably higher on the green axis. This is worth establishing *before* "
-        "training anything: it confirms the signal is real and physical, so a CNN that "
-        "works is learning botany rather than an artefact."
+        "of most foliar disease, so the **excess-green index** (2G − R − B, standard in "
+        "precision agriculture) ought to separate healthy from diseased leaves. "
+        "Pooled across all 14 crops it barely does: **|Cohen's d| = 0.25**, which is a "
+        "small effect. Hold the crop constant and the same feature becomes the "
+        "strongest measured, at **|d| = 1.15** — a 4.5× jump."
+    )
+    st.markdown(
+        "The direction is crop-specific too: diseased corn reads *greener* than healthy "
+        "corn, while diseased apple reads browner. **No single global colour threshold "
+        "can work.** That is the empirical case for a learned, crop-conditional "
+        "representation rather than hand-crafted rules — and it is why the pipeline "
+        "uses a pretrained backbone instead of the vegetation indices directly."
     )
     if features is not None and {"excess_green", "redness_index"} <= set(features.columns):
         sample = features.sample(min(len(features), 1500), random_state=0).copy()
@@ -385,13 +392,21 @@ with tab_insights:
     st.divider()
 
     # -- Finding 3 --------------------------------------------------------
-    st.markdown("#### 3 · Lesion texture is a second, independent signal")
+    st.markdown("#### 3 · Two texture features that turned out to be one — and weak")
     st.markdown(
-        "Necrotic spots, rust pustules and blight margins introduce high-frequency "
-        "intensity transitions that a uniformly green leaf simply does not have. "
-        "**Edge density** and **Laplacian variance** capture this, and they are "
-        "largely independent of colour — which is why they help most on the classes "
-        "colour confuses, such as early versus late blight on the same crop."
+        "The hypothesis was that necrotic spots and rust pustules introduce "
+        "high-frequency transitions a smooth leaf lacks, giving a texture signal "
+        "independent of colour. **The data refuted both halves of that.**"
+    )
+    st.markdown(
+        "**They are not independent of each other.** Edge density and Laplacian "
+        "variance correlate at **r = 0.90** — one signal, not two. Keeping both would "
+        "have added a feature and no information.\n\n"
+        "**And pooled, the signal is close to absent.** Edge density separates healthy "
+        "from diseased at **|d| = 0.10**, with the sign *opposite* to the prediction. "
+        "Only after conditioning on crop does it reach |d| = 0.77 — the same lesson as "
+        "finding 2, which is the real result here: **crop identity dominates the "
+        "feature space, and disease is the finer-grained axis underneath it.**"
     )
     if features is not None and {"edge_density", "laplacian_var"} <= set(features.columns):
         sample = features.sample(min(len(features), 1500), random_state=0).copy()
@@ -401,6 +416,16 @@ with tab_insights:
                                   x_title="edge density (fraction of edge pixels)",
                                   y_title="Laplacian variance"),
             use_container_width=True, config={"displayModeBar": False},
+        )
+        st.caption(
+            "The near-linear cloud is the redundancy: the two axes measure the same "
+            "thing. Healthy and diseased overlap almost completely."
+        )
+        st.warning(
+            "**A negative result kept rather than dropped.** Reporting only the "
+            "features that worked would misrepresent how well hand-crafted features "
+            "do on this problem — and would hide the finding that motivates the "
+            "whole architecture."
         )
 
     st.divider()
@@ -414,6 +439,15 @@ with tab_insights:
         "caveat rather than a feature: a model scoring 99% here is partly reading "
         "*acquisition conditions*, not just disease, and it will degrade on a loan "
         "officer's photo taken in a field with soil, hands and mixed daylight in frame."
+    )
+    st.markdown(
+        "There is direct evidence for that in the numbers. Pooled across crops, the "
+        "single best separator of healthy from diseased is **mean brightness** "
+        "(|d| = 0.76) — ahead of every vegetation index. Brightness carries no "
+        "botanical meaning; a leaf is not diseased because the photograph is darker. "
+        "A lighting or capture-session artefact out-ranking the biology is precisely "
+        "the signature of a dataset shortcut, and it is what a field photo will not "
+        "reproduce."
     )
     st.info(
         "**This is why the pipeline retrains.** Expected degradation on real field "

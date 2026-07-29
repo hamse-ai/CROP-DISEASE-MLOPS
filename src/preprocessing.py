@@ -120,8 +120,16 @@ def colour_statistics(img: np.ndarray) -> dict[str, float]:
     """Per-channel colour statistics and vegetation indices.
 
     Chlorosis and necrosis -- yellowing and browning -- are the visible
-    signature of most foliar disease, so a healthy leaf should sit measurably
-    higher on the green axis than a diseased one.
+    signature of most foliar disease, so a healthy leaf should sit higher on
+    the green axis than a diseased one.
+
+    It does, but only once crop is held constant. Pooled across all 14 crops
+    the excess-green effect is weak (|d| = 0.25); within a crop it is the
+    strongest feature measured (mean |d| = 1.15). The direction is also
+    crop-specific -- diseased corn is *greener* than healthy corn, diseased
+    apple is browner -- so no single global colour threshold works. That is
+    the empirical case for a learned, crop-conditional representation rather
+    than hand-crafted rules.
     """
     x = img.astype(np.float32)
     r, g, b = x[..., 0], x[..., 1], x[..., 2]
@@ -152,10 +160,21 @@ def colour_statistics(img: np.ndarray) -> dict[str, float]:
 
 
 def texture_features(img: np.ndarray) -> dict[str, float]:
-    """Edge and texture statistics used as a lesion-density proxy.
+    """Edge and texture statistics, intended as a lesion-density proxy.
 
-    Necrotic spots, rust pustules and blight margins introduce high-frequency
-    intensity transitions that a uniformly green healthy leaf lacks.
+    The intent was that necrotic spots and rust pustules introduce
+    high-frequency transitions a uniformly green leaf lacks. Measured on
+    PlantVillage, that does *not* hold globally: pooled across all crops,
+    edge density separates healthy from diseased with |Cohen's d| of only
+    0.10, and the sign is the opposite of the hypothesis.
+
+    Two caveats the EDA established, both worth knowing before using these:
+
+    * `edge_density` and `laplacian_var` correlate at r = 0.90 -- they are one
+      signal, not two.
+    * Conditioned on crop, edge density reaches |d| ~= 0.77. The pooled figure
+      is weak because it compares apple leaves with tomato leaves as much as
+      sick ones with healthy ones.
     """
     import cv2
     gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
