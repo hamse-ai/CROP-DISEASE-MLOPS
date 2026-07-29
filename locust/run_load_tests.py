@@ -66,6 +66,11 @@ def run_locust(host: str, users: int, duration: str, spawn_rate: int,
                tag: str) -> dict | None:
     """Run one headless Locust test and parse its aggregate stats."""
     prefix = OUTPUT_DIR / tag
+    # Locust appends to existing CSVs; stale rows from a previous run would be
+    # mixed into this one's statistics.
+    for stale in OUTPUT_DIR.glob(f"{tag}_*.csv"):
+        stale.unlink()
+
     result = run([
         "locust", "-f", str(LOCUSTFILE), "--headless",
         "--host", host,
@@ -97,10 +102,21 @@ def run_locust(host: str, users: int, duration: str, spawn_rate: int,
         except (TypeError, ValueError):
             return default
 
+    requests = int(number(aggregate, "Request Count"))
+    # Locust's "Requests/s" column is the *instantaneous* rate at the final
+    # snapshot, not the average over the run. One 4-container run reported
+    # 0.94 RPS for 1,962 requests in 45 seconds -- off by a factor of 46, and
+    # in the direction that would have made scaling look broken. Throughput is
+    # therefore derived from the request count and the measured elapsed time.
+    elapsed = _elapsed_seconds(prefix) or _duration_seconds(duration)
+    rps = round(requests / elapsed, 2) if elapsed else 0.0
+
     return {
-        "requests": int(number(aggregate, "Request Count")),
+        "requests": requests,
         "failures": int(number(aggregate, "Failure Count")),
-        "rps": round(number(aggregate, "Requests/s"), 2),
+        "rps": rps,
+        "elapsed_seconds": round(elapsed, 1),
+        "rps_locust_reported": round(number(aggregate, "Requests/s"), 2),
         "p50": number(aggregate, "50%"),
         "p95": number(aggregate, "95%"),
         "p99": number(aggregate, "99%"),
@@ -110,6 +126,56 @@ def run_locust(host: str, users: int, duration: str, spawn_rate: int,
         "predict_p95": number(predict, "95%") if predict else None,
         "predict_rps": round(number(predict, "Requests/s"), 2) if predict else None,
     }
+
+
+def _duration_seconds(duration: str) -> float:
+    """Parse a Locust duration string such as "45s", "2m" or "1h"."""
+    duration = duration.strip().lower()
+    units = {"s": 1, "m": 60, "h": 3600}
+    if duration and duration[-1] in units:
+        try:
+            return float(duration[:-1]) * units[duration[-1]]
+        except ValueError:
+            return 0.0
+    try:
+        return float(duration)
+    except ValueError:
+        return 0.0
+
+
+def _elapsed_seconds(prefix: Path, gap_threshold: float = 30.0) -> float:
+    """Measured wall-clock span of the most recent run in a history file.
+
+    Preferred over the configured duration because ramp-up and shutdown mean
+    the real span is not exactly what was asked for.
+
+    Locust *appends* to an existing `_stats_history.csv`, so a re-run leaves
+    the file holding several runs' rows. Taking min-to-max across all of them
+    produced a 2,094-second span for a 45-second run and a throughput figure
+    46x too low -- in the direction that made scaling look broken. Only the
+    final contiguous segment counts.
+    """
+    history = prefix.with_name(prefix.name + "_stats_history.csv")
+    if not history.exists():
+        return 0.0
+
+    import csv
+
+    try:
+        with history.open() as handle:
+            stamps = sorted(float(row["Timestamp"]) for row in csv.DictReader(handle)
+                            if row.get("Timestamp"))
+    except (OSError, ValueError, KeyError):
+        return 0.0
+    if len(stamps) < 2:
+        return 0.0
+
+    start = 0
+    for i in range(1, len(stamps)):
+        if stamps[i] - stamps[i - 1] > gap_threshold:
+            start = i
+    segment = stamps[start:]
+    return segment[-1] - segment[0] if len(segment) > 1 else 0.0
 
 
 def chart(results: list[dict]) -> Path | None:
@@ -182,6 +248,11 @@ def markdown_table(results: list[dict]) -> str:
             f"{r['failures']} | {r['rps']} | {r['p50']:.0f} | {r['p95']:.0f} | "
             f"{r['p99']:.0f} | {r.get('replicas_seen', '—')} |"
         )
+    lines.append("")
+    lines.append("RPS is computed as requests / measured elapsed time. Locust's own "
+                 "`Requests/s` column reports the *instantaneous* rate at the final "
+                 "snapshot and is unreliable -- it read 0.94 for a run that served "
+                 "1,962 requests in 45 s.")
     return "\n".join(lines)
 
 

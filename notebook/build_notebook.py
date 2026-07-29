@@ -807,28 +807,39 @@ display(rows.style.format({"macro-F1": "{:.4f}", "accuracy": "{:.4f}",
                            "vs full train": "{:+.4f}"}).hide(axis="index"))
 
 print(f"replay buffer costs   {safe['f1_macro']-reference['f1_macro']:+.4f} macro-F1 "
-      "— the price of bounding memory to ~38 MB")
+      f"— the price of bounding it to {REPLAY_BUFFER_PATH.stat().st_size/1e6:.0f} MB")
 print(f"uploads alone costs   {naive['f1_macro']-reference['f1_macro']:+.4f} macro-F1 "
       "— catastrophic forgetting")
 """)
 
 md(r"""
-The second row is the deliberate trade: the buffer holds 600 images per class rather than
-all 38k, so it gives up a small amount of accuracy in exchange for a bounded ~38 MB
-footprint that fits beside the model in a 512 MB container.
+The second row is the deliberate trade: the buffer holds 300 images per class rather than
+all 38k, giving up a little accuracy for a bounded ~21 MB footprint that fits beside the
+model inside a 512 MB container.
 
-That size was chosen by measurement, not by guess:
+That size was chosen by measurement, and then by what actually survived the container:
 
-| buffer | rows | disk | macro-F1 cost |
+| buffer | rows | disk | macro-F1 cost (mlp) |
 |---:|---:|---:|---:|
-| 150/class | 5,661 | 14 MB | −0.0360 — fails the promotion gate |
-| 300/class | 10,994 | 28 MB | −0.0192 — sits *exactly* on the tolerance |
-| **600/class** | **19,768** | **38 MB** | **−0.0078 — comfortable headroom** |
+| 150/class | 5,661 | 11 MB | −0.0360 |
+| **300/class** | **10,994** | **21 MB** | **−0.0192 — shipped** |
+| 600/class | 19,768 | 38 MB | −0.0078 |
 | 1000/class | 27,480 | 70 MB | −0.0008 — diminishing returns |
 
-At 300 per class every honest retrain would have been rejected for buffer size alone,
-which is indistinguishable from the gate working. 600 is the point where the gate only
-fires on real regressions.
+600 was tried first and the container was OOM-killed during the buffer refresh. 300 halves
+that and lands at a 310 MB peak against the 512 MB limit.
+
+### The subset cost is not a regression
+
+A 0.0192 cost against a 0.02 promotion tolerance would leave every honest retrain one
+rounding error from rejection. But that cost is a **constant offset from training on less
+data** — it is not caused by the new images at all. Comparing a buffer-trained candidate
+against v1, which saw the full 38k split, compares two different things.
+
+So export also fits a head on the **buffer alone** and records it as `buffer_baseline_f1`.
+The gate compares against that, and the tolerance then measures the thing it claims to:
+*did the new data make this worse?* Widening the tolerance instead would simply have hidden
+real regressions.
 
 The third row is the whole reason the buffer exists: fitting on the uploaded images alone
 collapses the model onto the two classes that were uploaded and destroys the other 36.
