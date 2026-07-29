@@ -40,6 +40,11 @@ LOAD_TEST_DIR = REPORTS_DIR / "load_test"
 STATE_DIR = Path(os.getenv("STATE_DIR", PROJECT_ROOT / "state"))
 PREDICTION_LOG_PATH = STATE_DIR / "prediction_log.jsonl"
 MONITOR_STATE_PATH = STATE_DIR / "monitoring_state.json"
+# Retraining job state, mirrored to disk so a job survives the worker that ran
+# it. Retraining is the container's peak-memory operation; a worker killed
+# mid-job would otherwise take its job table with it and the job would simply
+# vanish, with health checks still green.
+RETRAIN_JOBS_PATH = STATE_DIR / "retrain_jobs.json"
 
 # --------------------------------------------------------------------------
 # Dataset
@@ -74,7 +79,19 @@ BATCH_SIZE = 32
 # The replay buffer guards against catastrophic forgetting during retraining:
 # a new head is always fitted on (buffer + newly uploaded images), never on the
 # uploads alone. See src/retrain.py.
-REPLAY_SAMPLES_PER_CLASS = 300
+#
+# Size measured against the full training set rather than guessed, because it
+# trades accuracy for container memory (macro-F1 cost vs the full 38k split):
+#
+#     150/class   5,661 rows   14 MB   -0.0360   fails the promotion gate
+#     300/class  10,994 rows   28 MB   -0.0192   sits exactly on the tolerance
+#     600/class  19,768 rows   51 MB   -0.0078   comfortable headroom
+#    1000/class  27,480 rows   70 MB   -0.0008   diminishing returns
+#
+# 600 is the choice: the regression is well inside the 0.02 promotion
+# tolerance, so an honest retrain is not rejected for buffer size alone, and
+# the buffer still fits the memory budget.
+REPLAY_SAMPLES_PER_CLASS = 600
 # A smaller held-out sample used only to score retrained heads in-container.
 EVAL_SAMPLES_PER_CLASS = 100
 

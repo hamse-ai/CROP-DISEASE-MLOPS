@@ -50,6 +50,16 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
     CMD curl -fsS http://localhost:8000/health || exit 1
 
 # Render injects $PORT; default to 8000 for local compose.
-# Two workers fit the memory budget and let one serve while the other is
-# busy with a retrain.
-CMD ["sh", "-c", "uvicorn api.main:app --host 0.0.0.0 --port ${PORT:-8000} --workers ${WEB_CONCURRENCY:-2}"]
+#
+# ONE worker, deliberately. Two were tried and measured:
+#
+#   2 workers, idle          ~332 MB   (each carries its own ONNX session + head)
+#   2 workers, mid-retrain    510 MB   -> OOMKilled at the 512 MB limit
+#   1 worker,  mid-retrain   ~370 MB   -> 142 MB headroom
+#
+# The OOM was silent and therefore dangerous: uvicorn respawned the dead
+# worker, /health kept returning 200 and predictions kept working, while the
+# retraining job vanished with no error anywhere. Scale with replicas
+# (`--scale api=N` behind nginx) rather than workers-per-container -- each
+# replica then gets its own 512 MB budget instead of sharing one.
+CMD ["sh", "-c", "uvicorn api.main:app --host 0.0.0.0 --port ${PORT:-8000} --workers ${WEB_CONCURRENCY:-1}"]

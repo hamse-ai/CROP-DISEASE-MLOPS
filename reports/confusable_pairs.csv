@@ -1,0 +1,16 @@
+true,predicted,count,rate,same_crop
+Tomato___Target_Spot,Tomato___Spider_mites Two-spotted_spider_mite,11,0.05069124423963134,True
+Tomato___Early_blight,Tomato___Target_Spot,10,0.06451612903225806,True
+Corn_(maize)___Cercospora_leaf_spot Gray_leaf_spot,Corn_(maize)___Northern_Leaf_Blight,10,0.12048192771084337,True
+Tomato___Early_blight,Tomato___Late_blight,9,0.05806451612903226,True
+Tomato___Early_blight,Tomato___Septoria_leaf_spot,9,0.05806451612903226,True
+Corn_(maize)___Northern_Leaf_Blight,Corn_(maize)___Cercospora_leaf_spot Gray_leaf_spot,8,0.05194805194805195,True
+Grape___Black_rot,Grape___Esca_(Black_Measles),8,0.04395604395604396,True
+Tomato___Septoria_leaf_spot,Tomato___Bacterial_spot,8,0.029411764705882353,True
+Tomato___Spider_mites Two-spotted_spider_mite,Tomato___Target_Spot,7,0.027237354085603113,True
+Tomato___Bacterial_spot,Tomato___Septoria_leaf_spot,7,0.021538461538461538,True
+Tomato___Late_blight,Tomato___Early_blight,6,0.02054794520547945,True
+Potato___Late_blight,Tomato___Late_blight,5,0.03225806451612903,False
+Tomato___Septoria_leaf_spot,Tomato___Leaf_Mold,5,0.01838235294117647,True
+Tomato___Early_blight,Tomato___Bacterial_spot,5,0.03225806451612903,True
+Tomato___Septoria_leaf_spot,Tomato___Early_blight,5,0.01838235294117647,True

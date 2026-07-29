@@ -23,7 +23,10 @@ of what went wrong.
 
 from __future__ import annotations
 
+import gc
+import json
 import shutil
+import sys
 import threading
 import uuid
 from datetime import datetime, timezone
@@ -32,8 +35,13 @@ from typing import Any, Callable
 
 import numpy as np
 
+# Importable as `src.retrain` by the API, and runnable directly as
+# `python src/retrain.py` -- the latter needs the project root on the path.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 from src.config import (
     CLASS_NAMES_PATH,
+    RETRAIN_JOBS_PATH,
     EVAL_EMBEDDINGS_PATH,
     MODEL_DIR,
     RANDOM_SEED,
@@ -148,6 +156,38 @@ def load_replay_buffer(path: str | Path = REPLAY_BUFFER_PATH) -> tuple[np.ndarra
     return data["X"].astype(np.float32), data["y"].astype(np.int64)
 
 
+def build_training_matrix(X_new: np.ndarray, y_new: np.ndarray,
+                          path: str | Path = REPLAY_BUFFER_PATH
+                          ) -> tuple[np.ndarray, np.ndarray, int]:
+    """Combine the replay buffer with new embeddings in one allocation.
+
+    The obvious version -- expand the buffer to float32, then
+    ``np.concatenate([X_buffer, X_new])`` -- holds the buffer and the combined
+    matrix simultaneously, roughly 200 MB for a 600-per-class buffer. Inside a
+    512 MB container that is the difference between retraining and being OOM
+    killed, so the destination is allocated once and the float16 buffer is
+    converted directly into its first rows.
+    """
+    path = Path(path)
+    if not path.exists():
+        raise RetrainError(
+            f"replay buffer missing at {path}. Retraining without it would fit "
+            "the head on uploaded images alone and destroy every other class."
+        )
+
+    with np.load(path) as data:
+        X_buffer = data["X"]                     # left as float16
+        y_buffer = data["y"].astype(np.int64)
+
+        n_buffer, n_new = len(X_buffer), len(X_new)
+        X = np.empty((n_buffer + n_new, X_buffer.shape[1]), dtype=np.float32)
+        X[:n_buffer] = X_buffer                  # float16 -> float32 in place
+        X[n_buffer:] = X_new
+
+    y = np.concatenate([y_buffer, y_new.astype(np.int64)])
+    return X, y, n_buffer
+
+
 def load_eval_embeddings(path: str | Path = EVAL_EMBEDDINGS_PATH):
     """Load held-out embeddings used to score a candidate head."""
     path = Path(path)
@@ -184,15 +224,13 @@ def update_replay_buffer(X_old: np.ndarray, y_old: np.ndarray,
 # The retraining run
 # ==========================================================================
 
-def run_retraining(head_kind: str = "logreg",
+def run_retraining(head_kind: str | None = None,
                    upload_dir: str | Path = UPLOAD_DIR,
                    consume_uploads: bool = True,
                    max_regression: float = RETRAIN_MAX_F1_REGRESSION,
                    progress: Callable[[str, float], None] | None = None,
                    triggered_by: str = "manual") -> dict[str, Any]:
     """Run one retraining cycle. Returns a report suitable for the API."""
-    import json
-
     def step(message: str, fraction: float) -> None:
         print(f"  [{fraction:>5.0%}] {message}")
         if progress is not None:
@@ -200,6 +238,14 @@ def run_retraining(head_kind: str = "logreg",
 
     started = datetime.now(timezone.utc)
     registry = ModelRegistry()
+
+    # Inherit the active version's architecture unless one is named explicitly.
+    # Defaulting to a fixed kind silently swapped the deployed head type on
+    # every retrain (mlp -> logreg here), which cost ~0.007 macro-F1 on its own
+    # and made the promotion gate reject a change it should never have seen.
+    if head_kind is None:
+        active = registry.active_version()
+        head_kind = active.head_kind if active else "logreg"
 
     class_names = (json.loads(Path(CLASS_NAMES_PATH).read_text())
                    if Path(CLASS_NAMES_PATH).exists() else None)
@@ -239,15 +285,18 @@ def run_retraining(head_kind: str = "logreg",
 
     # -- 3. combine with the replay buffer --------------------------------
     step("loading replay buffer", 0.55)
-    X_buffer, y_buffer = load_replay_buffer()
-    X_train = np.concatenate([X_buffer, X_new])
-    y_train = np.concatenate([y_buffer, y_new])
+    X_train, y_train, n_buffer = build_training_matrix(X_new, y_new)
     step(f"training on {len(X_train):,} embeddings "
-         f"({len(X_buffer):,} replay + {len(X_new):,} new)", 0.60)
+         f"({n_buffer:,} replay + {len(X_new):,} new)", 0.60)
 
     # -- 4. fit -----------------------------------------------------------
     step(f"fitting {head_kind} head", 0.65)
     head = train_head(X_train, y_train, kind=head_kind, seed=RANDOM_SEED)
+
+    # Release the training matrix before scoring: it is the largest single
+    # allocation in the container and is not needed past this point.
+    del X_train
+    gc.collect()
 
     # -- 5. score ---------------------------------------------------------
     step("evaluating candidate on held-out embeddings", 0.80)
@@ -280,7 +329,7 @@ def run_retraining(head_kind: str = "logreg",
         head_file=head_file,
         metrics=metrics,
         activate=promote,
-        n_train_samples=int(len(X_train)),
+        n_train_samples=int(n_buffer + len(X_new)),
         n_new_samples=int(len(X_new)),
         head_kind=head_kind,
         source="retrain",
@@ -290,7 +339,13 @@ def run_retraining(head_kind: str = "logreg",
     # -- 7. consume + refresh ---------------------------------------------
     moved = 0
     if promote:
+        # Reload the buffer to fold the new embeddings in. It was deliberately
+        # released above, and re-reading 38 MB is far cheaper than holding it
+        # across the fit.
+        X_buffer, y_buffer = load_replay_buffer()
         update_replay_buffer(X_buffer, y_buffer, X_new, y_new)
+        del X_buffer, y_buffer
+        gc.collect()
         predictor.reload()
         if consume_uploads:
             step("archiving consumed uploads", 0.95)
@@ -313,8 +368,8 @@ def run_retraining(head_kind: str = "logreg",
         "finished_at": finished.isoformat(timespec="seconds"),
         "duration_seconds": round((finished - started).total_seconds(), 2),
         "n_new_images": int(len(X_new)),
-        "n_replay_images": int(len(X_buffer)),
-        "n_train_images": int(len(X_train)),
+        "n_replay_images": int(n_buffer),
+        "n_train_images": int(n_buffer + len(X_new)),
         "n_uploads_archived": moved,
         "metrics_before": {k: before_metrics.get(k) for k in
                            ("accuracy", "f1_macro", "top5_accuracy", "mean_confidence")},
@@ -333,14 +388,64 @@ def run_retraining(head_kind: str = "logreg",
 # ==========================================================================
 
 class RetrainJobManager:
-    """Tracks retraining jobs, allowing at most one at a time."""
+    """Tracks retraining jobs, allowing at most one at a time.
 
-    def __init__(self, max_history: int = 20):
+    Job state is mirrored to disk. Retraining is the most memory-hungry thing
+    the container does, and a worker that gets OOM-killed mid-job takes its
+    in-memory job table with it -- uvicorn silently respawns the worker, health
+    checks keep passing, and the user's job simply returns "unknown job" with
+    no error recorded anywhere. Persisting means a killed job is reported as
+    failed instead of disappearing.
+    """
+
+    def __init__(self, max_history: int = 20,
+                 state_path: str | Path | None = None):
         self._lock = threading.Lock()
         self._jobs: dict[str, dict[str, Any]] = {}
         self._order: list[str] = []
         self._max_history = max_history
         self._running: str | None = None
+        self._state_path = Path(state_path) if state_path else RETRAIN_JOBS_PATH
+        self._restore()
+
+    # -- persistence -------------------------------------------------------
+
+    def _restore(self) -> None:
+        """Load jobs from disk, marking interrupted ones as failed.
+
+        A job still flagged "running" in the file cannot actually be running:
+        this process has only just started, so whichever worker owned it died.
+        """
+        if not self._state_path.exists():
+            return
+        try:
+            data = json.loads(self._state_path.read_text())
+        except (OSError, json.JSONDecodeError):
+            return
+
+        for job in data.get("jobs", []):
+            if job.get("status") == "running":
+                job["status"] = "failed"
+                job["error"] = (
+                    "the worker running this job exited before it finished "
+                    "(most likely killed for exceeding the container memory "
+                    "limit during retraining)"
+                )
+                job["message"] = "interrupted -- worker exited"
+            self._jobs[job["job_id"]] = job
+            self._order.append(job["job_id"])
+
+    def _persist_locked(self) -> None:
+        """Write job state. Caller must hold the lock."""
+        try:
+            self._state_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self._state_path.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(
+                {"jobs": [self._jobs[j] for j in self._order]}, indent=2))
+            tmp.replace(self._state_path)
+        except OSError:
+            # Never let bookkeeping take down the retraining path.
+            pass
 
     @property
     def is_running(self) -> bool:
@@ -374,6 +479,7 @@ class RetrainJobManager:
             self._order.append(job_id)
             self._running = job_id
             self._trim()
+            self._persist_locked()
 
         thread = threading.Thread(target=self._run, args=(job_id, kwargs), daemon=True)
         thread.start()
@@ -386,6 +492,7 @@ class RetrainJobManager:
                 if job is not None:
                     job["message"] = message
                     job["progress"] = round(fraction, 3)
+                    self._persist_locked()
 
         try:
             result = run_retraining(progress=progress, **kwargs)
@@ -394,17 +501,39 @@ class RetrainJobManager:
                     status="completed", progress=1.0,
                     message=("promoted" if result["promoted"] else "rejected"),
                     result=result)
+                self._persist_locked()
         except Exception as exc:
             with self._lock:
                 self._jobs[job_id].update(
                     status="failed", message=str(exc), error=str(exc))
+                self._persist_locked()
         finally:
             with self._lock:
                 self._running = None
 
     def get(self, job_id: str) -> dict[str, Any] | None:
         with self._lock:
+            job = self._jobs.get(job_id)
+        if job is not None:
+            return job
+        # Not ours -- another worker may have run it, or a previous incarnation
+        # of this one did before being restarted.
+        self._reload_from_disk()
+        with self._lock:
             return self._jobs.get(job_id)
+
+    def _reload_from_disk(self) -> None:
+        if not self._state_path.exists():
+            return
+        try:
+            data = json.loads(self._state_path.read_text())
+        except (OSError, json.JSONDecodeError):
+            return
+        with self._lock:
+            for job in data.get("jobs", []):
+                if job["job_id"] not in self._jobs:
+                    self._jobs[job["job_id"]] = job
+                    self._order.append(job["job_id"])
 
     def recent(self, limit: int = 10) -> list[dict[str, Any]]:
         with self._lock:
@@ -433,7 +562,9 @@ if __name__ == "__main__":
     import json as _json
 
     parser = argparse.ArgumentParser(description="Retrain the classifier head.")
-    parser.add_argument("--head", default="logreg", choices=["logreg", "sgd", "mlp"])
+    parser.add_argument("--head", default=None, choices=["logreg", "sgd", "mlp"],
+                        help="head architecture; defaults to the active version's, "
+                             "so a retrain never silently swaps it")
     parser.add_argument("--keep-uploads", action="store_true")
     args = parser.parse_args()
 

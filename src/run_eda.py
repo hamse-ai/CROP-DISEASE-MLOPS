@@ -61,7 +61,10 @@ def figure_class_distribution(distribution: pd.DataFrame) -> Path:
     ax.barh(range(len(frame)), frame["count"], color=colours, height=0.68)
     ax.set_yticks(range(len(frame)))
     ax.set_yticklabels(labels, fontsize=8)
-    _style(ax, "Images per class — a 36x imbalance", "images", "")
+    # Computed, not hardcoded: this figure is built per split, and the train
+    # split's ratio differs from the full dataset's.
+    ratio = frame["count"].max() / max(frame["count"].min(), 1)
+    _style(ax, f"Images per class — a {ratio:.0f}x imbalance", "images", "")
     ax.grid(axis="y", visible=False)
 
     # Direct-label only the extremes; a number on every bar goes unread.

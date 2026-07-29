@@ -20,12 +20,26 @@ data/uploads/*
 data/PlantVillage-Dataset/
 
 # ---- Model artifacts --------------------------------------------------------
-# The frozen backbone, class names and registry ARE committed (small, needed to run).
-# Embedding replay buffers and retrained head versions are not.
-models/*.npz
+# Everything the container needs at runtime IS committed. Render builds the
+# image from this repository, so anything excluded here is simply absent in
+# production -- the replay buffer especially, without which retraining refuses
+# to run at all.
+#
+# Committed (~40 MB total):
+#   backbone_mobilenetv2.onnx   frozen feature extractor
+#   head_v1.pkl                 the shipped classifier
+#   train_embeddings.npz        replay buffer, needed to retrain
+#   eval_embeddings.npz         held-out set, needed to score a retrain
+#   class_names.json, registry.json
+#
+# Excluded: the full per-split embedding cache (~240 MB), which is a rebuildable
+# intermediate produced by `python src/train_export.py --embed`.
+models/embeddings/
+models/checkpoints/
+
+# Heads produced by retraining at runtime; v1 ships with the repo.
 models/head_v*.pkl
 !models/head_v1.pkl
-models/checkpoints/
 *.h5
 *.keras
 saved_model/

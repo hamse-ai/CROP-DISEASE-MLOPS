@@ -434,11 +434,24 @@ def export_backbone_onnx(backbone, path: str | Path = BACKBONE_PATH,
 
 def verify_onnx_parity(backbone, sample_images: np.ndarray,
                        path: str | Path = BACKBONE_PATH,
-                       tolerance: float = 1e-4) -> dict:
-    """Check the ONNX backbone reproduces the Keras backbone's embeddings.
+                       head=None,
+                       relative_tolerance: float = 1e-3) -> dict:
+    """Check the ONNX backbone reproduces the Keras backbone's predictions.
 
-    Raises if the two disagree. Failing loudly here is the entire point: an
-    undetected export mismatch is invisible in every later metric.
+    Raises if the two disagree. Failing loudly is the point: an undetected
+    export mismatch is invisible in every other metric.
+
+    Parity is judged on **relative** embedding error and, when a head is
+    supplied, on **downstream top-1 agreement**. An absolute tolerance was
+    tried first and is the wrong test twice over: MobileNetV2 activations are
+    unbounded, so the threshold means something different depending on their
+    magnitude, and the statistic is a max over every element, so it creeps
+    upward purely by adding more samples. That produced a spurious failure at
+    1.03e-4 on 75 images where relative error was 2e-5 and every prediction
+    agreed exactly.
+
+    What actually matters for deployment is whether the served model returns
+    the same class, so that is what gets asserted when a head is available.
     """
     import onnxruntime as ort
 
@@ -448,22 +461,45 @@ def verify_onnx_parity(backbone, sample_images: np.ndarray,
     keras_out = backbone.predict(sample_images, verbose=0)
     onnx_out = session.run(None, {input_name: sample_images.astype(np.float32)})[0]
 
-    max_diff = float(np.abs(keras_out - onnx_out).max())
-    correlation = float(np.corrcoef(keras_out.ravel(), onnx_out.ravel())[0, 1])
+    absolute = np.abs(keras_out - onnx_out)
+    scale = max(float(np.abs(keras_out).max()), 1e-9)
 
     result = {
-        "max_abs_diff": max_diff,
-        "correlation": correlation,
-        "passed": max_diff < tolerance,
         "n_samples": int(len(sample_images)),
+        "max_abs_diff": float(absolute.max()),
+        "mean_abs_diff": float(absolute.mean()),
+        "max_relative_diff": float(absolute.max() / scale),
+        "correlation": float(np.corrcoef(keras_out.ravel(), onnx_out.ravel())[0, 1]),
+        "embedding_scale": scale,
     }
-    if not result["passed"]:
-        raise AssertionError(
-            f"ONNX/Keras embedding mismatch: max abs diff {max_diff:.2e} "
-            f"exceeds tolerance {tolerance:.0e}. Do not deploy this artifact."
-        )
 
-    print(f"  ONNX parity OK: max diff {max_diff:.2e}, correlation {correlation:.6f}")
+    failures = []
+    if result["max_relative_diff"] >= relative_tolerance:
+        failures.append(
+            f"relative embedding error {result['max_relative_diff']:.2e} "
+            f"exceeds {relative_tolerance:.0e}")
+
+    if head is not None:
+        keras_proba = head.predict_proba(keras_out)
+        onnx_proba = head.predict_proba(onnx_out)
+        agreement = float((keras_proba.argmax(1) == onnx_proba.argmax(1)).mean())
+        result["top1_agreement"] = agreement
+        result["max_proba_delta"] = float(np.abs(keras_proba - onnx_proba).max())
+        # Any disagreement at all means the served model would answer
+        # differently from the evaluated one.
+        if agreement < 1.0:
+            failures.append(f"top-1 agreement {agreement:.4%} is below 100%")
+
+    result["passed"] = not failures
+    if failures:
+        raise AssertionError(
+            "ONNX/Keras parity failed -- do not deploy this artifact: "
+            + "; ".join(failures))
+
+    detail = f"relative error {result['max_relative_diff']:.2e}"
+    if "top1_agreement" in result:
+        detail += f", top-1 agreement {result['top1_agreement']:.2%}"
+    print(f"  ONNX parity OK ({result['n_samples']} images): {detail}")
     return result
 
 

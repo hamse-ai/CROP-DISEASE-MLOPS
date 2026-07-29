@@ -334,7 +334,7 @@ def uploads_summary() -> UploadSummaryResponse:
 # ==========================================================================
 
 @app.post("/retrain", response_model=RetrainJobResponse, tags=["model"])
-def retrain(head_kind: str = "logreg",
+def retrain(head_kind: str | None = None,
             force: bool = False,
             keep_uploads: bool = False) -> RetrainJobResponse:
     """Trigger retraining.
@@ -342,6 +342,10 @@ def retrain(head_kind: str = "logreg",
     Returns immediately with a job id; poll ``/retrain/status/{job_id}``.
     Holding the request open would time out behind most proxies and would tie
     up a worker that should be serving predictions.
+
+    ``head_kind`` defaults to the *active version's* architecture. Defaulting
+    to a fixed kind meant every retrain silently swapped the deployed head
+    type, costing accuracy the promotion gate then had to absorb.
 
     Without ``force``, the automatic trigger conditions must be satisfied --
     so the endpoint reflects the same policy the pipeline applies on its own.

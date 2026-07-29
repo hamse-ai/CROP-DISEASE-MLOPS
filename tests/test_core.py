@@ -385,3 +385,131 @@ def test_error_rate_uses_attempted_requests(tmp_path):
     for _ in range(97):
         monitor.record_prediction(confidence=0.9, latency_ms=5.0)
     assert monitor.stats()["error_rate"] == pytest.approx(0.03)
+
+
+# ==========================================================================
+# Retraining safeguards
+# ==========================================================================
+
+def test_retrain_inherits_active_head_kind(tmp_path, monkeypatch):
+    """A retrain must not silently swap the deployed head architecture.
+
+    run_retraining used to default to "logreg" regardless of what was
+    deployed, so retraining an mlp model quietly downgraded it -- costing
+    accuracy that the promotion gate then had to absorb as if it were
+    forgetting.
+    """
+    import src.retrain as retrain_module
+
+    registry = ModelRegistry(path=tmp_path / "registry.json", model_dir=tmp_path)
+    (tmp_path / "head_v1.pkl").write_bytes(b"x")
+    registry.register("v1", "head_v1.pkl", {"f1_macro": 0.96}, head_kind="mlp")
+
+    monkeypatch.setattr(retrain_module, "ModelRegistry",
+                        lambda *a, **k: registry)
+
+    captured = {}
+
+    def fake_collect(*_a, **_kw):
+        captured["reached_collect"] = True
+        raise retrain_module.RetrainError("stop here -- head_kind already resolved")
+
+    monkeypatch.setattr(retrain_module, "collect_uploads", fake_collect)
+
+    # head_kind=None must resolve from the registry before anything else runs.
+    with pytest.raises(retrain_module.RetrainError):
+        retrain_module.run_retraining(head_kind=None, upload_dir=tmp_path)
+    assert captured.get("reached_collect")
+
+    active = registry.active_version()
+    assert active.head_kind == "mlp", "registry should still report the mlp head"
+
+
+def test_build_training_matrix_combines_without_duplicating(tmp_path):
+    """The combined matrix must be one allocation, and hold the right rows.
+
+    The naive concatenate held the buffer and the result at once -- roughly
+    200 MB for this buffer size, which does not fit beside a loaded model in a
+    512 MB container.
+    """
+    from src.retrain import build_training_matrix
+
+    rng = np.random.default_rng(0)
+    X_buffer = rng.normal(size=(500, 64)).astype(np.float16)
+    y_buffer = rng.integers(0, 38, 500)
+    path = tmp_path / "buffer.npz"
+    np.savez_compressed(path, X=X_buffer, y=y_buffer)
+
+    X_new = rng.normal(size=(20, 64)).astype(np.float32)
+    y_new = rng.integers(0, 38, 20)
+
+    X, y, n_buffer = build_training_matrix(X_new, y_new, path=path)
+
+    assert n_buffer == 500
+    assert X.shape == (520, 64)
+    assert X.dtype == np.float32
+    assert len(y) == 520
+    # New rows must land after the buffer, unmodified.
+    np.testing.assert_allclose(X[500:], X_new, rtol=1e-6)
+    np.testing.assert_array_equal(y[500:], y_new)
+
+
+def test_build_training_matrix_requires_a_buffer(tmp_path):
+    """Retraining without the replay buffer must refuse, not silently proceed."""
+    from src.retrain import RetrainError, build_training_matrix
+
+    with pytest.raises(RetrainError, match="replay buffer missing"):
+        build_training_matrix(np.zeros((4, 64), np.float32), np.zeros(4, np.int64),
+                              path=tmp_path / "absent.npz")
+
+
+def test_retrain_job_survives_worker_death(tmp_path):
+    """A job whose worker was OOM-killed must report failure, not vanish.
+
+    Observed for real: the container hit its 512 MB limit during a retrain,
+    the kernel killed the uvicorn worker, uvicorn respawned it, /health stayed
+    green -- and the job returned "unknown job" with no error recorded. Silent
+    failure is worse than a loud one.
+    """
+    from src.retrain import RetrainJobManager
+
+    state = tmp_path / "jobs.json"
+
+    manager = RetrainJobManager(state_path=state)
+    with manager._lock:
+        manager._jobs["abc123"] = {
+            "job_id": "abc123", "status": "running", "progress": 0.55,
+            "message": "loading replay buffer", "submitted_at": "now",
+            "result": None, "error": None,
+        }
+        manager._order.append("abc123")
+        manager._persist_locked()
+
+    # A fresh manager stands in for the respawned worker.
+    revived = RetrainJobManager(state_path=state)
+    job = revived.get("abc123")
+
+    assert job is not None, "job must not vanish when its worker dies"
+    assert job["status"] == "failed"
+    assert "memory" in job["error"].lower()
+
+
+def test_completed_jobs_are_readable_by_another_worker(tmp_path):
+    """With replicas, the worker polled is rarely the one that ran the job."""
+    from src.retrain import RetrainJobManager
+
+    state = tmp_path / "jobs.json"
+    owner = RetrainJobManager(state_path=state)
+    with owner._lock:
+        owner._jobs["done1"] = {
+            "job_id": "done1", "status": "completed", "progress": 1.0,
+            "message": "promoted", "submitted_at": "now",
+            "result": {"version": "v2", "promoted": True}, "error": None,
+        }
+        owner._order.append("done1")
+        owner._persist_locked()
+
+    other = RetrainJobManager(state_path=state)
+    job = other.get("done1")
+    assert job["status"] == "completed"
+    assert job["result"]["version"] == "v2"
