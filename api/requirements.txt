@@ -1,0 +1,19 @@
+# SLIM serving image -- deliberately no TensorFlow.
+#
+# The whole backbone/head architecture exists so this list stays short enough
+# to run inside a 512 MB container. Adding tensorflow here would defeat it.
+
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+python-multipart==0.0.20
+pydantic==2.10.4
+
+# Inference: the frozen backbone runs on ONNX Runtime, the head on scikit-learn.
+onnxruntime==1.20.1
+scikit-learn==1.6.0
+joblib==1.4.2
+numpy==2.0.2
+pillow==11.0.0
+
+# Used by the EDA feature extractors that preprocessing imports.
+opencv-python-headless==4.10.0.84
