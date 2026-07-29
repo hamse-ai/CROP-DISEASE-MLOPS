@@ -14,8 +14,8 @@ retraining that runs **inside the deployed container**.
 | **Retraining** | 37 s in-container, 310 MB peak against a 512 MB limit |
 
 - **Notebook:** [`notebook/crop_disease_mlops.ipynb`](notebook/crop_disease_mlops.ipynb)
-- **Video demo:** _link to be added_
-- **Live URLs:** _to be added after deployment — see [Deploying](#deploying)_
+- **Video demo:** `https://www.youtube.com/watch?v=2cjto9_wuk0`
+- **Live URLs:** `https://crop-disease-ui-mv4i.onrender.com/`
 
 ---
 
