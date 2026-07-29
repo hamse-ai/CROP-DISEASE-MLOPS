@@ -1,0 +1,20 @@
+# The dataset must never enter the build context: 930 MB of images would be
+# sent to the daemon on every build.
+data/train/
+data/test/
+data/val/
+data/raw/
+data/uploads/
+models/embeddings/
+
+.git/
+.pytest_cache/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+notebook/
+tests/
+locust/
+state/
+reports/load_test/
+*.log

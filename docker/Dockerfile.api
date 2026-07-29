@@ -1,0 +1,55 @@
+# Prediction API.
+#
+# Deliberately TensorFlow-free. The frozen backbone is served through ONNX
+# Runtime and the classifier head through scikit-learn, which is what keeps
+# this image inside a 512 MB free-tier memory budget -- installing TensorFlow
+# here would defeat the entire backbone/head split.
+
+FROM python:3.11-slim AS base
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    # ONNX Runtime and OpenBLAS each default to spawning a thread per core.
+    # Under load every concurrent request would then oversubscribe the CPU and
+    # latency would collapse. One thread per worker, many workers, is faster.
+    OMP_NUM_THREADS=1 \
+    OPENBLAS_NUM_THREADS=1 \
+    MKL_NUM_THREADS=1
+
+WORKDIR /app
+
+# libgomp is required by ONNX Runtime; libglib by opencv-python-headless.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libgomp1 libglib2.0-0 curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Dependencies before source, so editing code does not invalidate the
+# (slow) dependency layer.
+COPY api/requirements.txt ./api/requirements.txt
+RUN pip install --no-cache-dir -r api/requirements.txt
+
+COPY src/ ./src/
+COPY api/ ./api/
+COPY models/ ./models/
+
+# Writable state lives outside models/ so mounting a model volume cannot
+# clobber the prediction log or monitoring counters.
+ENV STATE_DIR=/app/state \
+    DATA_DIR=/app/data \
+    MODEL_DIR=/app/models
+RUN mkdir -p /app/state /app/data/uploads
+
+RUN useradd --create-home --uid 1000 appuser \
+    && chown -R appuser:appuser /app
+USER appuser
+
+EXPOSE 8000
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD curl -fsS http://localhost:8000/health || exit 1
+
+# Render injects $PORT; default to 8000 for local compose.
+# Two workers fit the memory budget and let one serve while the other is
+# busy with a retrain.
+CMD ["sh", "-c", "uvicorn api.main:app --host 0.0.0.0 --port ${PORT:-8000} --workers ${WEB_CONCURRENCY:-2}"]

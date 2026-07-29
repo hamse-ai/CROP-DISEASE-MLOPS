@@ -1,0 +1,57 @@
+# Render blueprint: two Docker services, API and dashboard.
+#
+# Deploy by pointing Render at this repo ("New > Blueprint"). The UI receives
+# the API's public URL automatically via fromService, so no URL is hardcoded.
+#
+# KNOWN LIMITATION -- free instances have an EPHEMERAL filesystem. A head
+# produced by retraining is written to /app/models and is lost when the
+# instance restarts or spins down after inactivity. Retraining therefore works
+# and is demonstrable within a session, but does not survive a restart.
+# Persisting it needs either a Render disk (paid) or object storage; see the
+# README. This is documented rather than hidden because a reader would
+# otherwise reasonably assume retrained models persist.
+
+services:
+  - type: web
+    name: crop-disease-api
+    runtime: docker
+    dockerfilePath: ./docker/Dockerfile.api
+    dockerContext: .
+    plan: free
+    region: frankfurt
+    healthCheckPath: /health
+    envVars:
+      # Free tier is 512 MB. A single worker keeps peak RSS well under it;
+      # the Dockerfile defaults to 2, which is right for a larger plan.
+      - key: WEB_CONCURRENCY
+        value: "1"
+      - key: OMP_NUM_THREADS
+        value: "1"
+      - key: MODEL_DIR
+        value: /app/models
+      - key: DATA_DIR
+        value: /app/data
+      - key: STATE_DIR
+        value: /app/state
+      # Retrain sooner than the local default: a demo will not upload 50
+      # images by hand.
+      - key: RETRAIN_UPLOAD_THRESHOLD
+        value: "10"
+
+  - type: web
+    name: crop-disease-ui
+    runtime: docker
+    dockerfilePath: ./docker/Dockerfile.ui
+    dockerContext: .
+    plan: free
+    region: frankfurt
+    healthCheckPath: /_stcore/health
+    envVars:
+      # Yields a bare hostname such as "crop-disease-api.onrender.com" with no
+      # scheme, and Render does not interpolate strings into envVars. The UI's
+      # _resolve_api_url() prepends https:// when the scheme is missing.
+      - key: API_URL
+        fromService:
+          name: crop-disease-api
+          type: web
+          property: host

@@ -31,17 +31,28 @@ from ui import theme
 def _resolve_api_url() -> str:
     """Find the API base URL: Streamlit secret, then env var, then localhost.
 
-    `st.secrets` raises rather than returning empty when no secrets.toml exists,
-    which is the normal case for local runs and for the Docker deployment (where
-    the URL arrives as an environment variable), so the lookup has to be guarded.
+    Two quirks are handled here:
+
+    * `st.secrets` *raises* rather than returning empty when no secrets.toml
+      exists -- the normal case locally and in Docker, where the URL arrives as
+      an environment variable -- so the lookup must be guarded.
+    * Render's `fromService` injects a bare hostname with no scheme, and it
+      does not interpolate strings into env vars. A scheme is added when
+      missing, defaulting to https for anything that is not local.
     """
+    raw = ""
     try:
-        secret = st.secrets.get("API_URL")
-        if secret:
-            return str(secret).rstrip("/")
+        raw = str(st.secrets.get("API_URL") or "")
     except Exception:
-        pass
-    return os.getenv("API_URL", "http://localhost:8000").rstrip("/")
+        raw = ""
+    if not raw:
+        raw = os.getenv("API_URL", "http://localhost:8000")
+
+    raw = raw.strip().rstrip("/")
+    if not raw.startswith(("http://", "https://")):
+        local = raw.startswith(("localhost", "127.0.0.1", "nginx", "api"))
+        raw = f"{'http' if local else 'https'}://{raw}"
+    return raw
 
 
 API_URL = _resolve_api_url()
