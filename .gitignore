@@ -1,12 +1,18 @@
 # ---- Dataset ----------------------------------------------------------------
-# The full PlantVillage dataset (~1.5 GB, 54,303 images) is NOT committed.
+# The full PlantVillage dataset (~1.5 GB, 54,305 images) is NOT committed.
 # Fetch it with:  python src/acquire_data.py
 # A small sample (5 images per class) IS committed so the repo runs out of the box
 # -- the negations below keep that sample tracked.
+#
+# All three splits must be listed. An earlier version named only train and test,
+# so data/val -- which has no SAMPLE_ files to re-include -- was committed whole:
+# 8,129 images and 139 MB of history for a directory nothing needs at runtime.
 data/train/**
 data/test/**
+data/val/**
 !data/train/**/
 !data/test/**/
+!data/val/**/
 !data/**/.gitkeep
 !data/**/SAMPLE_*.jpg
 !data/**/SAMPLE_*.JPG
