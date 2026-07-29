@@ -13,7 +13,12 @@ services:
       context: .
       dockerfile: docker/Dockerfile.api
     environment:
-      WEB_CONCURRENCY: ${WEB_CONCURRENCY:-2}
+      # ONE worker. Two were measured at ~332 MB idle and OOM-killed during a
+      # retrain against the 512 MB limit, because each worker holds its own
+      # ONNX session and head. Scale with replicas (--scale api=N behind
+      # nginx), which gives each its own budget, not with workers per
+      # container which share one.
+      WEB_CONCURRENCY: ${WEB_CONCURRENCY:-1}
       MODEL_DIR: /app/models
       DATA_DIR: /app/data
       STATE_DIR: /app/state

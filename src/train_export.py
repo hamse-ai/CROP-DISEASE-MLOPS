@@ -227,6 +227,26 @@ def stage_export(head, metrics: dict, class_names: list[str]) -> None:
     print(f"    {X_replay.shape} -> {REPLAY_BUFFER_PATH.name} "
           f"({REPLAY_BUFFER_PATH.stat().st_size / 1e6:.1f} MB)")
 
+    # Score a head fitted on the buffer ALONE. Retrained heads are fitted on
+    # this buffer plus new uploads, so this -- not the full-training-set score
+    # -- is the fair reference for the promotion gate. Without it every retrain
+    # is charged for the buffer's subset penalty and honest ones get rejected.
+    print("\n  fitting the buffer-only baseline for the promotion gate...")
+    baseline_head = train_head(X_replay.astype(np.float32), y_replay,
+                               kind=metrics.get("head_kind", "logreg"),
+                               seed=RANDOM_SEED)
+    baseline_proba = np.zeros((len(X_test), len(class_names)), dtype=np.float32)
+    baseline_proba[:, baseline_head.classes_.astype(int)] = \
+        baseline_head.predict_proba(X_test)
+    baseline_metrics = evaluate_predictions(y_test, baseline_proba, class_names)
+
+    metrics["buffer_baseline_f1"] = baseline_metrics["f1_macro"]
+    metrics["buffer_size"] = int(len(X_replay))
+    print(f"    buffer-only macro-F1 {baseline_metrics['f1_macro']:.4f} "
+          f"vs full-train {metrics['f1_macro']:.4f} "
+          f"(subset cost {metrics['f1_macro'] - baseline_metrics['f1_macro']:+.4f})")
+    del baseline_head, baseline_proba
+
     print(f"\n  building held-out evaluation set "
           f"({EVAL_SAMPLES_PER_CLASS} per class)...")
     X_eval, y_eval = build_replay_buffer(X_test, y_test,

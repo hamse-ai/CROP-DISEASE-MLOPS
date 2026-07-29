@@ -15,5 +15,9 @@ joblib==1.4.2
 numpy==2.0.2
 pillow==11.0.0
 
-# Used by the EDA feature extractors that preprocessing imports.
-opencv-python-headless==4.10.0.84
+# NOT installed on purpose: opencv-python-headless (~137 MB with its bundled
+# libs). src/preprocessing imports cv2 lazily, only inside colour_statistics
+# and texture_features, and nothing on the request path calls them -- the API
+# uses load_image, preprocess_for_backbone, split_class_name, is_healthy and
+# list_images, all pure NumPy/Pillow. tests/test_serving_deps.py asserts this
+# so the dependency cannot creep back in unnoticed.

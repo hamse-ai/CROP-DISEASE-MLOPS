@@ -1782,17 +1782,19 @@
     "logreg": {
       "f1_macro": 0.9542503344328607,
       "accuracy": 0.9634641407307172,
-      "fit_seconds": 87.3
+      "fit_seconds": 120.7
     },
     "sgd": {
       "f1_macro": 0.9478690751085631,
       "accuracy": 0.9619879443966047,
-      "fit_seconds": 30.5
+      "fit_seconds": 34.0
     },
     "mlp": {
       "f1_macro": 0.9613556104255899,
       "accuracy": 0.9692459097059909,
-      "fit_seconds": 89.8
+      "fit_seconds": 129.7
     }
-  }
+  },
+  "buffer_baseline_f1": 0.9411287096131725,
+  "buffer_size": 10994
 }

@@ -204,17 +204,31 @@ def save_embeddings(X: np.ndarray, y: np.ndarray, path: str | Path) -> Path:
     return path
 
 
-def update_replay_buffer(X_old: np.ndarray, y_old: np.ndarray,
-                         X_new: np.ndarray, y_new: np.ndarray,
+def update_replay_buffer(X_new: np.ndarray, y_new: np.ndarray,
                          per_class: int = REPLAY_SAMPLES_PER_CLASS,
                          path: str | Path = REPLAY_BUFFER_PATH) -> tuple[int, int]:
     """Fold newly learned embeddings into the buffer, keeping it bounded.
 
     Without the re-subsample the buffer would grow without limit across
     retrains and eventually exceed the container's memory.
+
+    **Everything here stays float16.** The first version took float32 arrays,
+    concatenated them and re-subsampled, holding three float32 copies of the
+    buffer at once plus zlib's compression buffers. That is what actually
+    killed the worker in testing -- not the fit, which adds only ~18 MB. The
+    peak landed *after* the model had been registered, so the retrain appeared
+    to succeed and then the process vanished at 90%.
+
+    float16 is the buffer's storage dtype anyway, so converting to float32 to
+    shuffle rows was pure waste.
     """
-    X = np.concatenate([X_old, X_new])
-    y = np.concatenate([y_old, y_new])
+    with np.load(path) as data:
+        X_old = data["X"]                      # float16, ~21 MB at 300/class
+        y_old = data["y"].astype(np.int64)
+
+        X = np.concatenate([X_old, X_new.astype(np.float16)])
+        y = np.concatenate([y_old, y_new.astype(np.int64)])
+
     X, y = build_replay_buffer(X, y, per_class=per_class)
     save_embeddings(X, y, path)
     return len(X), int(len(np.unique(y)))
@@ -339,12 +353,11 @@ def run_retraining(head_kind: str | None = None,
     # -- 7. consume + refresh ---------------------------------------------
     moved = 0
     if promote:
-        # Reload the buffer to fold the new embeddings in. It was deliberately
-        # released above, and re-reading 38 MB is far cheaper than holding it
-        # across the fit.
-        X_buffer, y_buffer = load_replay_buffer()
-        update_replay_buffer(X_buffer, y_buffer, X_new, y_new)
-        del X_buffer, y_buffer
+        # Release the evaluation set first: this is the container's second
+        # memory peak and it does not need to overlap with the first.
+        del X_eval
+        gc.collect()
+        update_replay_buffer(X_new, y_new)
         gc.collect()
         predictor.reload()
         if consume_uploads:
@@ -398,6 +411,12 @@ class RetrainJobManager:
     failed instead of disappearing.
     """
 
+    # A running job must refresh its heartbeat within this window or it is
+    # treated as abandoned. Comfortably longer than the slowest observed
+    # retrain step (embedding a large upload batch), so a healthy job is never
+    # declared dead.
+    STALL_TIMEOUT_SECONDS = 180
+
     def __init__(self, max_history: int = 20,
                  state_path: str | Path | None = None):
         self._lock = threading.Lock()
@@ -405,38 +424,75 @@ class RetrainJobManager:
         self._order: list[str] = []
         self._max_history = max_history
         self._running: str | None = None
+        # Jobs this process is executing; their in-memory state is
+        # authoritative and must never be overwritten from disk.
+        self._own_jobs: set[str] = set()
         self._state_path = Path(state_path) if state_path else RETRAIN_JOBS_PATH
         self._restore()
 
     # -- persistence -------------------------------------------------------
 
     def _restore(self) -> None:
-        """Load jobs from disk, marking interrupted ones as failed.
-
-        A job still flagged "running" in the file cannot actually be running:
-        this process has only just started, so whichever worker owned it died.
-        """
-        if not self._state_path.exists():
-            return
-        try:
-            data = json.loads(self._state_path.read_text())
-        except (OSError, json.JSONDecodeError):
-            return
-
-        for job in data.get("jobs", []):
-            if job.get("status") == "running":
-                job["status"] = "failed"
-                job["error"] = (
-                    "the worker running this job exited before it finished "
-                    "(most likely killed for exceeding the container memory "
-                    "limit during retraining)"
-                )
-                job["message"] = "interrupted -- worker exited"
+        """Load jobs from disk, marking genuinely abandoned ones as failed."""
+        for job in self._read_disk_jobs():
             self._jobs[job["job_id"]] = job
             self._order.append(job["job_id"])
 
+    def _read_disk_jobs(self) -> list[dict[str, Any]]:
+        """Read persisted jobs, resolving the status of stale "running" ones.
+
+        A job flagged "running" is *not* necessarily dead. With more than one
+        worker -- or more than one replica behind the balancer -- the process
+        reading this file is frequently not the one executing the job, and
+        declaring it failed on sight reports a perfectly healthy retrain as
+        having crashed. That bug was observed: a completed, promoted retrain
+        was reported to the caller as "worker exited".
+
+        A heartbeat distinguishes the two. Progress updates refresh
+        ``updated_at``; only a running job that has gone quiet for longer than
+        the stall timeout is treated as abandoned.
+        """
+        if not self._state_path.exists():
+            return []
+        try:
+            data = json.loads(self._state_path.read_text())
+        except (OSError, json.JSONDecodeError):
+            return []
+
+        now = datetime.now(timezone.utc)
+        jobs = []
+        for job in data.get("jobs", []):
+            if job.get("status") == "running":
+                stalled_for = self._seconds_since(job.get("updated_at"), now)
+                if stalled_for is None or stalled_for > self.STALL_TIMEOUT_SECONDS:
+                    job["status"] = "failed"
+                    job["message"] = "interrupted -- worker exited"
+                    job["error"] = (
+                        f"no progress for {stalled_for:.0f}s"
+                        if stalled_for is not None else "no heartbeat recorded"
+                    ) + (
+                        "; the worker running this job exited before it "
+                        "finished (most likely killed for exceeding the "
+                        "container memory limit during retraining)"
+                    )
+            jobs.append(job)
+        return jobs
+
+    @staticmethod
+    def _seconds_since(timestamp: str | None, now: datetime) -> float | None:
+        if not timestamp:
+            return None
+        try:
+            return (now - datetime.fromisoformat(timestamp)).total_seconds()
+        except ValueError:
+            return None
+
     def _persist_locked(self) -> None:
-        """Write job state. Caller must hold the lock."""
+        """Write job state, stamping heartbeats. Caller must hold the lock."""
+        stamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        for job_id in self._order:
+            if self._jobs[job_id].get("status") == "running":
+                self._jobs[job_id]["updated_at"] = stamp
         try:
             self._state_path.parent.mkdir(parents=True, exist_ok=True)
             tmp = self._state_path.with_suffix(".json.tmp")
@@ -477,6 +533,7 @@ class RetrainJobManager:
                 "error": None,
             }
             self._order.append(job_id)
+            self._own_jobs.add(job_id)
             self._running = job_id
             self._trim()
             self._persist_locked()
@@ -514,7 +571,10 @@ class RetrainJobManager:
     def get(self, job_id: str) -> dict[str, Any] | None:
         with self._lock:
             job = self._jobs.get(job_id)
-        if job is not None:
+            owned = job_id in self._own_jobs
+        # A job this process is running is authoritative in memory. One it only
+        # read from disk may have been advanced since by whoever owns it.
+        if job is not None and owned:
             return job
         # Not ours -- another worker may have run it, or a previous incarnation
         # of this one did before being restarted.
@@ -523,14 +583,9 @@ class RetrainJobManager:
             return self._jobs.get(job_id)
 
     def _reload_from_disk(self) -> None:
-        if not self._state_path.exists():
-            return
-        try:
-            data = json.loads(self._state_path.read_text())
-        except (OSError, json.JSONDecodeError):
-            return
-        with self._lock:
-            for job in data.get("jobs", []):
+        """Pull in jobs owned by another worker or replica."""
+        for job in self._read_disk_jobs():
+            with self._lock:
                 if job["job_id"] not in self._jobs:
                     self._jobs[job["job_id"]] = job
                     self._order.append(job["job_id"])

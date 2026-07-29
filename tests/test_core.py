@@ -463,35 +463,60 @@ def test_build_training_matrix_requires_a_buffer(tmp_path):
                               path=tmp_path / "absent.npz")
 
 
-def test_retrain_job_survives_worker_death(tmp_path):
-    """A job whose worker was OOM-killed must report failure, not vanish.
+def _write_job(state, job_id, status, updated_at, **extra):
+    import json as _json
+    payload = {"jobs": [{"job_id": job_id, "status": status, "progress": 0.55,
+                         "message": "loading replay buffer", "submitted_at": "now",
+                         "updated_at": updated_at, "result": None, "error": None,
+                         **extra}]}
+    state.write_text(_json.dumps(payload))
+
+
+def test_stalled_job_is_reported_as_failed(tmp_path):
+    """A job whose worker died must report failure, not vanish.
 
     Observed for real: the container hit its 512 MB limit during a retrain,
     the kernel killed the uvicorn worker, uvicorn respawned it, /health stayed
     green -- and the job returned "unknown job" with no error recorded. Silent
     failure is worse than a loud one.
     """
+    from datetime import datetime, timedelta, timezone
+
     from src.retrain import RetrainJobManager
 
     state = tmp_path / "jobs.json"
+    stale = (datetime.now(timezone.utc) - timedelta(seconds=600)).isoformat(timespec="seconds")
+    _write_job(state, "abc123", "running", stale)
 
-    manager = RetrainJobManager(state_path=state)
-    with manager._lock:
-        manager._jobs["abc123"] = {
-            "job_id": "abc123", "status": "running", "progress": 0.55,
-            "message": "loading replay buffer", "submitted_at": "now",
-            "result": None, "error": None,
-        }
-        manager._order.append("abc123")
-        manager._persist_locked()
-
-    # A fresh manager stands in for the respawned worker.
     revived = RetrainJobManager(state_path=state)
     job = revived.get("abc123")
 
     assert job is not None, "job must not vanish when its worker dies"
     assert job["status"] == "failed"
     assert "memory" in job["error"].lower()
+
+
+def test_live_job_owned_by_another_worker_is_not_declared_dead(tmp_path):
+    """The bug this heartbeat exists to prevent.
+
+    With more than one worker (or replica), the process answering a status
+    poll is usually NOT the one running the job. Declaring any "running" job
+    dead on sight reported a completed, promoted retrain as "worker exited" --
+    a healthy pipeline looking broken.
+    """
+    from datetime import datetime, timezone
+
+    from src.retrain import RetrainJobManager
+
+    state = tmp_path / "jobs.json"
+    fresh = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    _write_job(state, "live1", "running", fresh)
+
+    observer = RetrainJobManager(state_path=state)   # a different worker
+    job = observer.get("live1")
+
+    assert job["status"] == "running", "a live job must not be reported failed"
+    assert job["error"] is None
 
 
 def test_completed_jobs_are_readable_by_another_worker(tmp_path):
@@ -513,3 +538,34 @@ def test_completed_jobs_are_readable_by_another_worker(tmp_path):
     job = other.get("done1")
     assert job["status"] == "completed"
     assert job["result"]["version"] == "v2"
+
+
+def test_update_replay_buffer_stays_float16_and_bounded(tmp_path):
+    """The buffer refresh must not inflate to float32.
+
+    This is what actually killed the container worker: the refresh loaded the
+    buffer as float32, concatenated (a second copy) and re-subsampled (a third)
+    while zlib compressed the result. The peak landed *after* the new model was
+    registered, so the retrain looked successful and then the process vanished
+    at 90%. The fit itself only adds ~18 MB.
+    """
+    from src.retrain import update_replay_buffer
+
+    rng = np.random.default_rng(0)
+    path = tmp_path / "buffer.npz"
+    # 38 classes at the per-class cap, as it ships.
+    y_old = np.repeat(np.arange(38), 300)
+    X_old = rng.normal(size=(len(y_old), 64)).astype(np.float16)
+    np.savez_compressed(path, X=X_old, y=y_old)
+
+    X_new = rng.normal(size=(40, 64)).astype(np.float32)
+    y_new = rng.integers(0, 38, 40)
+
+    n, n_classes = update_replay_buffer(X_new, y_new, per_class=300, path=path)
+
+    with np.load(path) as data:
+        assert data["X"].dtype == np.float16, "buffer must stay float16 on disk"
+        # Bounded: adding images must not grow it past the per-class cap.
+        assert len(data["X"]) <= 38 * 300
+        assert len(np.unique(data["y"])) == 38, "every class must survive"
+    assert n == len(np.load(path)["X"]) and n_classes == 38

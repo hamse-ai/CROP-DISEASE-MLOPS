@@ -164,28 +164,50 @@ class ModelRegistry:
 
         Retraining on user-uploaded data is the one place where an automated
         pipeline can quietly make the model worse, so promotion is gated on
-        macro-F1 rather than being automatic. Macro-F1 is the gate because it is
-        the metric that notices when rare disease classes have been sacrificed
-        to fit whatever the user just uploaded.
+        macro-F1 rather than being automatic. Macro-F1 is the gate because it
+        is the metric that notices when rare disease classes have been
+        sacrificed to fit whatever the user just uploaded.
+
+        **What the candidate is compared against matters.** v1 is fitted on the
+        full 38k training split; a retrained head is fitted on the replay
+        buffer plus new uploads. The buffer is a stratified subset, so it costs
+        a measured ~0.019 macro-F1 on its own -- a constant offset from having
+        less data, not a regression caused by the new images. Comparing against
+        v1 would charge every retrain for that offset and reject honest ones,
+        which is indistinguishable from the gate working.
+
+        So when the active version records `buffer_baseline_f1` -- the score of
+        a head fitted on the buffer alone, written at export time -- that is
+        the reference. The tolerance then measures the thing it claims to: did
+        the new data make this worse?
         """
         current = self.active_version()
         if current is None or not current.metrics:
             return True, "no active version to compare against"
 
-        before = current.metrics.get("f1_macro")
         after = candidate_metrics.get("f1_macro")
-        if before is None or after is None:
+        if after is None:
             return True, "macro-F1 unavailable; promoting by default"
 
-        delta = after - before
+        baseline = current.metrics.get("buffer_baseline_f1")
+        if baseline is not None:
+            reference = "buffer baseline"
+        else:
+            baseline = current.metrics.get("f1_macro")
+            reference = "active version"
+        if baseline is None:
+            return True, "macro-F1 unavailable; promoting by default"
+
+        delta = after - baseline
         if delta < -max_regression:
             return False, (
-                f"macro-F1 regressed {abs(delta):.4f} "
-                f"({before:.4f} -> {after:.4f}), exceeding the "
+                f"macro-F1 regressed {abs(delta):.4f} vs the {reference} "
+                f"({baseline:.4f} -> {after:.4f}), exceeding the "
                 f"{max_regression:.4f} tolerance"
             )
-        direction = "improved" if delta >= 0 else "within tolerance"
-        return True, f"macro-F1 {direction} ({before:.4f} -> {after:.4f})"
+        direction = "improved on" if delta >= 0 else "within tolerance of"
+        return True, (f"macro-F1 {direction} the {reference} "
+                      f"({baseline:.4f} -> {after:.4f})")
 
     def prune(self, keep: int = 10) -> list[str]:
         """Delete the oldest heads, never touching the active one."""

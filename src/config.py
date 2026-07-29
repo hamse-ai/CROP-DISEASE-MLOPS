@@ -83,15 +83,21 @@ BATCH_SIZE = 32
 # Size measured against the full training set rather than guessed, because it
 # trades accuracy for container memory (macro-F1 cost vs the full 38k split):
 #
-#     150/class   5,661 rows   14 MB   -0.0360   fails the promotion gate
-#     300/class  10,994 rows   28 MB   -0.0192   sits exactly on the tolerance
-#     600/class  19,768 rows   51 MB   -0.0078   comfortable headroom
+#     150/class   5,661 rows   14 MB   -0.0360
+#     300/class  10,994 rows   28 MB   -0.0192   <- shipped
+#     600/class  19,768 rows   38 MB   -0.0078
 #    1000/class  27,480 rows   70 MB   -0.0008   diminishing returns
 #
-# 600 is the choice: the regression is well inside the 0.02 promotion
-# tolerance, so an honest retrain is not rejected for buffer size alone, and
-# the buffer still fits the memory budget.
-REPLAY_SAMPLES_PER_CLASS = 600
+# 600 was tried first and OOM-killed the container: scikit-learn upcasts the
+# buffer to float64 while fitting, so a 19,768x1280 matrix needs ~200 MB
+# transient on top of a ~272 MB idle footprint, against a 512 MB limit.
+# 300/class halves that and lands around 390 MB.
+#
+# The -0.0192 cost is NOT absorbed by the promotion tolerance below. It is a
+# constant offset from training on a subset, not a regression caused by new
+# data, so the registry compares candidates against a baseline fitted on this
+# same buffer (`buffer_baseline_f1`). See ModelRegistry.should_promote.
+REPLAY_SAMPLES_PER_CLASS = 300
 # A smaller held-out sample used only to score retrained heads in-container.
 EVAL_SAMPLES_PER_CLASS = 100
 
